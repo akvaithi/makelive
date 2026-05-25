@@ -1,0 +1,1 @@
+Convert a photo + video pair into an Apple Live Photo.

@@ -46,6 +46,11 @@ makelive = "makelive.__main__:main"
 [tool.flit.sdist]
 exclude = ["site/**/*", "tests/**/*"]
 
+# Used only when running py2app via setup.py (Flit is the real build backend).
+[tool.setuptools.dynamic]
+version = { attr = "makelive.version.__version__" }
+description = { file = "DESCRIPTION.txt" }
+
 [tool.mypy]
 ignore_missing_imports = true
 

@@ -1,135 +1,152 @@
 # MakeLive
+
 <!-- ALL-CONTRIBUTORS-BADGE:START - Do not remove or modify this section -->
 [![All Contributors](https://img.shields.io/badge/all_contributors-2-orange.svg?style=flat-square)](#contributors-)
 <!-- ALL-CONTRIBUTORS-BADGE:END -->
 
-Convert an photo + video pair into a Live Photo.
+Convert a photo + video pair into an Apple Live Photo, and add it straight to your Photos library.
 
-This is a simple command line tool that will apply the necessary metadata to a photo + video pair so that when they are imported into the Apple Photos, they will be treated as a Live Photo.
+> This is a fork of [RhetTbull/makelive](https://github.com/RhetTbull/makelive). The fork adds:
+> - a **macOS GUI app** with batch processing
+> - a **byte-perfect HEIC pipeline** (HEVC bitstream is not re-encoded)
+> - **HDR gain map and other auxiliary image preservation** on the JPEG path
+>
+> Library and CLI behaviour is otherwise identical to upstream. Pure CLI users may prefer the upstream package.
 
-This is useful for converting images taken an Android phone into Live Photos that can be imported into Apple Photos.
+## Download
 
-## Usage
+Grab the latest **MakeLive.app** from the [releases page](https://github.com/akvaithi/makelive/releases). Unzip, drag into `/Applications/`, and launch. Apple Silicon only.
+
+The bundle is unsigned. On first launch macOS will warn; either right-click → Open, or clear the quarantine attribute:
 
 ```bash
-makelive image_1234.jpg image_1234.mov
+xattr -dr com.apple.quarantine /Applications/MakeLive.app
 ```
+
+## GUI
+
+Drop any mix of photos and videos onto the window. Pairs are auto-matched by filename stem (`IMG_0001.heic` + `IMG_0001.mov`); unmatched files are reported in the summary line. Click **Process All** and each pair is stamped with a Live Photo `ContentIdentifier` and added to Photos via PhotoKit. Your original files are never modified — everything happens on temp copies.
+
+- Liquid-glass-ish translucent window, adapts to system light / dark appearance
+- Drop anywhere in the window (or use **Add Files…**)
+- Sequential background worker with per-row status (Pending → Processing → Added / Failed)
+- Direct PhotoKit import — no Photos.app jump
+
+## CLI
+
+The CLI behaves the same as upstream:
+
+```bash
+makelive IMG_1234.jpg IMG_1234.mov
+```
+
+See `makelive --help` for `--check`, `--pvt`, `--manual`, etc. Full CLI docs in upstream's README.
 
 ## Requirements
 
-- macOS (Tested on 13.5.1; should work on 10.15+)
-- Python 3.9+
+- macOS 10.15+ (GUI tested on macOS 14+, app bundle on macOS 26)
+- Python 3.9+ (for installing from source; not needed for the .app)
 
 ## Installation
 
-### Install via Pre-Built Binary Installer Package
+### macOS app (recommended)
 
-Download and run the latest installer package for your Mac architecture from the [releases page](https://github.com/RhetTbull/makelive/releases).
+Download from [releases](https://github.com/akvaithi/makelive/releases).
 
-### Install via uv
-
-Alternatively, you can install with uv:
-
-- Install [uv](https://docs.astral.sh/uv/getting-started/installation/):
+### From source
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+git clone https://github.com/akvaithi/makelive.git
+cd makelive
+uv venv && source .venv/bin/activate
+uv pip install -e .
 ```
 
-- Install makelive:
+Run the CLI as `makelive ...` or the GUI as `python -m makelive_gui`. To produce a standalone `MakeLive.app`:
 
 ```bash
-uv install makelive
+uv pip install py2app
+python setup.py py2app          # standalone bundle in dist/
+python setup.py py2app -A       # alias build for fast dev iteration
 ```
 
-Alternatively, you can run makelive with uv without installing it:
-
-```bash
-uvx makelive image_1234.jpg image_1234.mov
-```
-
-**Note**: This package may not install with `pip` due to a dependency resolution issue. PRs are welcome.
-
-### Install from Source
-
-To install from source:
-
-- Install [uv](https://docs.astral.sh/uv/getting-started/installation/): `curl -LsSf https://astral.sh/uv/install.sh | sh`
-- `git clone git@github.com:RhetTbull/makelive.git`
-- `cd makelive`
-- `uv venv`
-- `source .venv/bin/activate`
-- `uv pip install flit`
-- `flit install`
+> If you hit `AttributeError: module 'zlib' has no attribute '__file__'` during the standalone build on Python 3.11+, patch `.venv/lib/python3.11/site-packages/py2app/build_app.py` around line 2443 to skip `zlib` when `__file__` is missing — it's been statically linked into CPython since 3.11.
 
 ## API
-
-You can use makelive to programmatically create Live Photo pairs:
 
 ```python
 from makelive import make_live_photo
 
-photo_path = "test.jpg"
-video_path = "test.mov"
-asset_id = make_live_photo(photo_path, video_path)
-print(f"Wrote Asset ID: {asset_id} to {photo_path} and {video_path}")
+asset_id = make_live_photo("test.heic", "test.mov")
+print(f"Wrote asset ID: {asset_id}")
 ```
 
-You can also check if a photo and video pair are a Live Photo pair and get the asset ID:
+Check whether a pair is already a Live Photo, and read back its identifier:
 
 ```python
-from makelive import live_id, is_live_photo_pair
-photo_path = "test.jpg"
-video_path = "test.mov"
-print(f"Is Live Photo Pair: {is_live_photo_pair(photo_path, video_path)}")
-print(f"Asset ID: {live_id(photo_path)}")
+from makelive import is_live_photo_pair, live_id
+
+print(is_live_photo_pair("test.heic", "test.mov"))   # asset_id or False
+print(live_id("test.heic"))                          # asset_id or None
 ```
 
-Live Photos can also be created as a [.pvt package](https://fileinfo.com/extension/pvt). Use `save_live_photo_pair_as_pvt` to create a .pvt package from a photo and video pair. This is useful for creating Live Photos that can be shared via AirDrop or other methods that may not preserve the Live Photo metadata. Unlike `make_live_photo`, `save_live_photo_pair_as_pvt` does not modify the original photo and video files but instead copies them into a `.pvt` package and modifies the copies. If the original photo and video are already a Live Photo pair, the `.pvt` package will be created with the same asset ID; if not, a new asset ID will be generated.
+Save a `.pvt` package (preserves originals; the package can be double-clicked into Photos):
 
 ```python
 from makelive import save_live_photo_pair_as_pvt
-photo_path = "test.jpg"
-video_path = "test.mov"
-asset_id, pvt_path = save_live_photo_pair_as_pvt(photo_path, video_path)
-print(f"Wrote .pvt package to {pvt_path} with {asset_id}")
+
+asset_id, pvt_path = save_live_photo_pair_as_pvt("test.heic", "test.mov")
 ```
-
-> [!NOTE]
-> XMP metadata in the QuickTime movie file is not preserved when writing the Content Identifier tag to the movie file which may result in metadata loss.
-
-Metadata including EXIF, IPTC, and XMP are preserved in the image file but will be rewritten and the Core Graphics API may change the order of the metadata and normalize the values. For example, the tag XMP:TagsList will be rewritten as XMP:Subject and the value will be normalized to a list of title case strings.
-
-If you must preserve the original metadata completely, it is recommended to make a copy of the metadata using a tool like [exiftool](https://exiftool.org) before calling this function and then restore the metadata after calling this function. (But take care not to delete the `ContentIdentifier` metadata.)
 
 ## How it works
 
-In order for Photos to treat a photo + video pair as a Live Photo, the video file must contain a Content Identifier metadata tag set to a [UUID](https://en.wikipedia.org/wiki/Universally_unique_identifier). The associated photo must contain a Content Identifier metadata tag set to the same UUID. Unfortunately, these tags cannot be written with the standard [exiftool](https://exiftool.org/) utility if they do not already exist in the file as the metadata is stored in Maker Notes which exiftool cannot create.
+To register as a Live Photo, the photo's MakerNote and the video's QuickTime metadata must both carry the same `ContentIdentifier` UUID. The MakerNote field cannot be created by tools like `exiftool` if it doesn't already exist.
 
-This tool uses the Core Graphics and AV Foundation frameworks to modify the metadata of the photo and video files to add the required Content Identifier.
+**Video side** — `AVMutableMovie.writeMovieHeaderToURL_` rewrites only the movie header for `.mov`; track data and `cdsc`/`cdep` tref atoms (needed for Live Wallpaper) are preserved. `.mp4` falls back to `AVAssetExportSession` with the passthrough preset.
 
-## Limitations
+**Photo side** — split by format:
 
-The Live Photos created by this tool may not work as Live Wallpapers. I don't user Live Wallpapers and don't have time to debug this. I believe the issue has to do with video format and/or video length. I'm happy to accept a PR but please don't open an issue if Live Wallpapers don't work.
+| Format | Path | Pixel data | Notes |
+|---|---|---|---|
+| **HEIC / HEIF** | [`heic_metadata.py`](makelive/heic_metadata.py) — ISOBMFF box surgery | **byte-identical** | Adds ~100 bytes for the new MakerNote. HDR gain map / depth / auxiliary items preserved trivially because `mdat` isn't touched. |
+| **JPEG** | `CGImageDestinationAddImageFromSource` (default quality = passthrough) | **byte-identical** | `kCGImageDestinationPreserveGainMap` set; depth / portrait / segmentation mattes re-attached explicitly via `CGImageDestinationAddAuxiliaryDataInfo`. |
 
-## Caution
+The HEIC path bypasses Core Graphics entirely because `CGImageDestinationCopyImageSource` (the lossless CG API) can't write MakerNote, while `AddImageFromSource` (which can) always re-encodes HEVC. So the fork walks the file's ISOBMFF box tree, finds the `Exif` item via `iinf` + `iloc`, injects an Apple-format MakerNote with [`piexif`](https://pypi.org/project/piexif/), appends the new EXIF blob into the trailing `mdat` (extending the box's size header so no bytes sit outside any box — strict readers like Adobe Camera Raw reject orphaned trailing data), and updates only the EXIF item's `iloc` extent.
 
-> [!WARNING]
-> This tool has not yet been extensively tested. It is recommended that you make a backup of your photo and video files before using this tool as it will overwrite the files which is required to add the necessary metadata. This also means that the files will be re-encoded and as a result, the file size may change, as may the quality of the image and video. I've used the native Apple APIs to do the encoding at maxixum quality but you should verify that the results are suitable for your needs.
+Verified on iPhone HEICs and the bundled `tests/test2.heic`. Files outside the validated shape (multi-extent EXIF, missing EXIF item, non-trailing `mdat`, `construction_method != 0`) raise `NotImplementedError` with a clear message rather than silently corrupting.
 
-## Source Code
+## Caveats
 
-The source code is available [here](https://github.com/RhetTbull/makelive).
+- **Apple Silicon only** for the bundled .app. From-source install works on Intel Macs but isn't tested as thoroughly.
+- The .app is **unsigned and unnotarised**.
+- XMP metadata in QuickTime movies isn't preserved on the `.mp4` path (this is an upstream behaviour and applies to videos only).
+- The byte-perfect HEIC path assumes the source has a single `Exif` item with one extent and the `mdat` is the trailing top-level box. True for iPhone and Android HEICs in the wild; raises a clear error otherwise.
+
+## Project layout
+
+```
+makelive/
+├── makelive/
+│   ├── makelive.py        # public API + JPEG / video paths
+│   └── heic_metadata.py   # NEW — byte-perfect HEIC injection
+├── makelive_gui/          # NEW — Cocoa GUI app
+├── setup.py + app_main.py # NEW — py2app build for MakeLive.app
+└── tests/
+```
+
+## Upstream
+
+Core library improvements (HEIC byte-perfect path + aux preservation) are submitted upstream as [RhetTbull/makelive#35](https://github.com/RhetTbull/makelive/pull/35). The GUI lives only in this fork.
 
 ## License
 
-MIT License, see [LICENSE](LICENSE) for details.
+MIT. See [LICENSE](LICENSE).
 
 ## Credits
 
-The [Live-Photo-master](https://github.com/GUIYIVIEW/LivePhoto-master) project by [GUIYIVIEW](https://github.com/GUIYIVIEW) was helpful for understanding how to set the asset ID in the QuickTime file. Copyright (c) 2017 GUIYIVIEW and [published under the MIT License](https://github.com/GUIYIVIEW/LivePhoto-master/blob/master/LICENSE).
-
-Thank you to [Yorian](https://github.com/Yorian) who proposed this project and provided the test images. For more information, see [this discussion](https://github.com/RhetTbull/makelive/discussions/1398).
+- Upstream project by [@RhetTbull](https://github.com/RhetTbull) — see [original README](https://github.com/RhetTbull/makelive#readme).
+- [Live-Photo-master](https://github.com/GUIYIVIEW/LivePhoto-master) by [@GUIYIVIEW](https://github.com/GUIYIVIEW) for the asset-id-in-QuickTime technique.
+- [@Yorian](https://github.com/Yorian) for proposing the original project and test images.
 
 ## Contributors ✨
 
@@ -152,4 +169,4 @@ Thanks goes to these wonderful people ([emoji key](https://allcontributors.org/d
 
 <!-- ALL-CONTRIBUTORS-LIST:END -->
 
-This project follows the [all-contributors](https://github.com/all-contributors/all-contributors) specification. Contributions of any kind welcome!
+This project follows the [all-contributors](https://github.com/all-contributors/all-contributors) specification.

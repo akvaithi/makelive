@@ -16,8 +16,10 @@ dependencies = [
     "piexif>=1.1.3",
     "pyobjc-core>=9.2",
     "pyobjc-framework-AVFoundation>=9.2",
+    "pyobjc-framework-Cocoa>=9.2",
     "pyobjc-framework-Contacts>=9.2",
     "pyobjc-framework-CoreLocation>=9.2",
+    "pyobjc-framework-Photos>=9.2",
     "pyobjc-framework-Quartz>=9.2",
     "wheel>=0.41.2",
     "wurlitzer>=3.0.3",
@@ -27,6 +29,7 @@ dependencies = [
 test = ["pytest>=7.4.2", "pytest-cov", "mypy>=1.6.1"]
 lint = ["ruff>=0.1.14"]
 dev = ["applecrate>=0.2.0", "bump2version==1.0.1"]
+app = ["py2app>=0.28"]
 
 # docs = [
 #     "mkdocs>=1.4.2",
@@ -42,6 +45,9 @@ Source = "https://github.com/RhetTbull/makelive"
 
 [project.scripts]
 makelive = "makelive.__main__:main"
+
+[project.gui-scripts]
+makelive-gui = "makelive_gui.app:run"
 
 [tool.flit.sdist]
 exclude = ["site/**/*", "tests/**/*"]

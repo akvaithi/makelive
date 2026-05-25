@@ -1,0 +1,1 @@
+"""Cocoa GUI for makelive."""

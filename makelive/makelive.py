@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import pathlib
 import shutil
-import threading
 import uuid
 
 import AVFoundation
@@ -21,6 +20,7 @@ from Foundation import (
 from wurlitzer import pipes
 
 from .heic_metadata import set_heic_content_identifier
+from .mp4_metadata import set_mp4_content_identifier
 
 # Constants
 # key for the MakerApple dictionary in the image metadata to store the asset ID
@@ -143,55 +143,8 @@ def avmetadata_for_asset_id(asset_id: str) -> AVFoundation.AVMetadataItem:
     return item
 
 
-def _add_asset_id_via_export_session(filepath: pathlib.Path, asset_id: str) -> str | None:
-    """Stamp the content identifier via AVAssetExportSession (passthrough).
-
-    This re-exports the file and does not preserve track reference atoms (tref).
-    Used for non-QuickTime containers (e.g. .mp4) where AVMutableMovie's
-    writeMovieHeaderToURL is not supported.
-    """
-    with objc.autorelease_pool():
-        # rename file so export can write to original path
-        temp_filepath = filepath.parent / f".{asset_id}_{filepath.name}"
-        os.rename(filepath, temp_filepath)
-        input_url = NSURL.fileURLWithPath_(str(temp_filepath))
-        output_url = NSURL.fileURLWithPath_(str(filepath))
-        asset = AVFoundation.AVAsset.assetWithURL_(input_url)
-        metadata_item = avmetadata_for_asset_id(asset_id)
-        export_session = AVFoundation.AVAssetExportSession.alloc().initWithAsset_presetName_(
-            asset, AVFoundation.AVAssetExportPresetPassthrough
-        )
-
-        export_session.setOutputFileType_(AVFoundation.AVFileTypeQuickTimeMovie)
-        export_session.setOutputURL_(output_url)
-        export_session.setMetadata_([metadata_item])
-
-        event = threading.Event()
-        error = None
-
-        def _completion_handler():
-            nonlocal error
-            if error_val := export_session.error():
-                error = error_val.description()
-            event.set()
-
-        export_session.exportAsynchronouslyWithCompletionHandler_(_completion_handler)
-        event.wait()
-
-        if error:
-            try:
-                os.unlink(filepath)
-            except FileNotFoundError:
-                pass
-            os.rename(temp_filepath, filepath)
-        else:
-            os.unlink(temp_filepath)
-
-        return error or None
-
-
 def add_asset_id_to_quicktime_file(filepath: str | os.PathLike, asset_id: str) -> str | None:
-    """Write the asset id to a QuickTime movie file at filepath and save to destination path
+    """Write the asset id to a QuickTime movie file at filepath and save to destination path.
 
     Args:
         filepath: Path to the QuickTime movie file.
@@ -199,22 +152,25 @@ def add_asset_id_to_quicktime_file(filepath: str | os.PathLike, asset_id: str) -
 
     Returns: Error message if there was an error, otherwise None.
 
-    For QuickTime (.mov) files, this updates only the movie-level metadata (content
-    identifier) and writes back the movie header in place. All track data, track
-    reference atoms (tref), and mebx metadata tracks are preserved exactly as they
-    were in the original file. iOS requires the cdsc/cdep tref associations between
-    mebx timed-metadata tracks and the video track to enable lock screen Live
-    Wallpaper animation (the "animate" button); writing only the movie header keeps
-    them intact.
+    For `.mov` files, uses AVMutableMovie.writeMovieHeaderToURL to rewrite only
+    the movie header in place. All track data, track reference atoms (tref),
+    and mebx metadata tracks are preserved exactly as they were in the
+    original file. iOS requires the cdsc/cdep tref associations between mebx
+    timed-metadata tracks and the video track to enable lock screen Live
+    Wallpaper animation (the "animate" button).
 
-    For .mp4 files, AVMutableMovie's writeMovieHeaderToURL is not supported by the
-    underlying media format, so this falls back to AVAssetExportSession with
-    AVAssetExportPresetPassthrough. .mp4 is not used by Live Wallpapers, so the
-    tref-preservation behaviour is not relevant for that path.
+    For `.mp4` files, uses byte-level ISOBMFF surgery in `mp4_metadata`. The
+    HEVC bitstream inside `mdat` is byte-identical to the source; only `moov`
+    is rewritten (in place when possible, or as a free-box + appended new
+    moov otherwise). No re-encoding, no track-data remux.
     """
     filepath = pathlib.Path(filepath)
     if filepath.suffix.lower() != ".mov":
-        return _add_asset_id_via_export_session(filepath, asset_id)
+        try:
+            set_mp4_content_identifier(filepath, asset_id)
+            return None
+        except Exception as e:
+            return str(e)
 
     with objc.autorelease_pool():
         url = NSURL.fileURLWithPath_(str(filepath))

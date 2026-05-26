@@ -17,17 +17,21 @@ from Photos import (
 )
 
 try:
-    from Photos import PHAccessLevelAddOnly
+    from Photos import PHAccessLevelAddOnly, PHAccessLevelReadWrite
 except ImportError:
     PHAccessLevelAddOnly = 1
+    PHAccessLevelReadWrite = 2
 
 
 class PhotosImportError(RuntimeError):
     """Raised when adding the Live Photo to the Photos library fails."""
 
 
-def _request_authorization() -> None:
-    status = PHPhotoLibrary.authorizationStatusForAccessLevel_(PHAccessLevelAddOnly)
+def _request_authorization(level=None) -> None:
+    """Block until we have at least the requested access level (default: add-only)."""
+    if level is None:
+        level = PHAccessLevelAddOnly
+    status = PHPhotoLibrary.authorizationStatusForAccessLevel_(level)
     if status == PHAuthorizationStatusAuthorized:
         return
 
@@ -38,9 +42,7 @@ def _request_authorization() -> None:
         result["status"] = new_status
         event.set()
 
-    PHPhotoLibrary.requestAuthorizationForAccessLevel_handler_(
-        PHAccessLevelAddOnly, handler
-    )
+    PHPhotoLibrary.requestAuthorizationForAccessLevel_handler_(level, handler)
     event.wait()
     if result.get("status") != PHAuthorizationStatusAuthorized:
         raise PhotosImportError(

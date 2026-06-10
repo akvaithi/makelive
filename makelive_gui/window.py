@@ -66,7 +66,11 @@ from Foundation import NSMakeRect, NSObject, NSOperationQueue, NSURL
 
 from makelive.__main__ import find_photo_video_pairs
 from makelive.makelive import is_image_file, is_video_file, make_live_photo
-from makelive.video_reencode import reencode_to_hevc
+from makelive.video_reencode import (
+    check_live_photo_video,
+    normalize_audio_to_aac,
+    reencode_to_hevc,
+)
 
 from .photos import PhotosImportError, import_live_photo
 
@@ -276,10 +280,26 @@ def _thumb_key_for_asset(asset) -> str:
 
 
 class RemovableTableView(NSTableView):
-    """NSTableView that calls the controller back when the user hits Delete /
-    Backspace on the selected row(s). The controller's `removeSelectedRows_`
-    method (set as the table's target) does the actual removal.
+    """NSTableView that delivers Delete / Backspace key presses to a separate
+    callback. Note that we deliberately do NOT use the table's own
+    target/action for this — AppKit fires those on single-click too, which
+    would cause clicking a row to delete it.
     """
+
+    def initWithFrame_(self, frame):
+        self = objc.super(RemovableTableView, self).initWithFrame_(frame)
+        if self is None:
+            return None
+        self._delete_target = None
+        self._delete_action = None
+        return self
+
+    @objc.python_method
+    def setDeleteCallback(self, target, action_selector: str):
+        """Register a `target` + Objective-C selector to invoke when the user
+        presses Delete or Backspace while this table is first responder."""
+        self._delete_target = target
+        self._delete_action = action_selector
 
     def keyDown_(self, event):
         chars = event.charactersIgnoringModifiers()
@@ -287,10 +307,10 @@ class RemovableTableView(NSTableView):
             code = ord(chars[0])
             # 0x7F = Delete (Forward Delete), 0x08 = Backspace
             if code in (0x7F, 0x08):
-                target = self.target()
-                action = self.action()
-                if target is not None and action is not None:
-                    target.performSelector_withObject_(action, self)
+                if self._delete_target is not None and self._delete_action is not None:
+                    self._delete_target.performSelector_withObject_(
+                        self._delete_action, self
+                    )
                     return
         objc.super(RemovableTableView, self).keyDown_(event)
 
@@ -788,10 +808,11 @@ class MainWindowController(NSObject):
         table.setIdentifier_(identifier)
         table.setDataSource_(self)
         table.setDelegate_(self)
-        # Delete-key handling: controller's removeRowsFromTable_ method reads
-        # the table's selectedRowIndexes and deletes accordingly.
-        table.setTarget_(self)
-        table.setAction_("removeRowsFromTable:")
+        # Delete / Backspace removes the selected row(s). Wired through a
+        # side-channel, not the table's `action`, because the action fires on
+        # single-click too and would delete rows the user is just trying to
+        # select.
+        table.setDeleteCallback(self, "removeRowsFromTable:")
         table.setMenu_(self._build_remove_menu())
 
         col = NSTableColumn.alloc().initWithIdentifier_(identifier + "_col")
@@ -894,8 +915,8 @@ class MainWindowController(NSObject):
         table.setIdentifier_("queue")
         table.setDataSource_(self)
         table.setDelegate_(self)
-        table.setTarget_(self)
-        table.setAction_("removeRowsFromTable:")
+        # See _make_simple_table for why we avoid setTarget_/setAction_ here.
+        table.setDeleteCallback(self, "removeRowsFromTable:")
         table.setMenu_(self._build_remove_menu())
         col = NSTableColumn.alloc().initWithIdentifier_("pair")
         col.setResizingMask_(1)
@@ -1401,7 +1422,29 @@ class MainWindowController(NSObject):
                                 vc_initial.unlink(missing_ok=True)
                                 tmp_out.rename(vc)
                         else:
-                            vc = vc_initial
+                            # Pre-flight check the source video for known
+                            # Live-Photo incompatibilities. Audio-codec issues
+                            # are *silently fixed* by transcoding only the
+                            # audio track to AAC (video stream stays
+                            # byte-perfect — no re-encode of pixels). Other
+                            # blockers (exotic video codec, no video track)
+                            # are surfaced as actionable errors.
+                            stage = "checking video compatibility"
+                            issues = check_live_photo_video(vc_initial)
+                            audio_issue = any("audio codec is" in i for i in issues)
+                            hard = [
+                                i for i in issues
+                                if "video codec is" in i or "no video track" in i
+                            ]
+                            if hard:
+                                raise ValueError("; ".join(hard))
+                            if audio_issue:
+                                stage = "transcoding audio to AAC"
+                                vc = tmp / (pair.video.stem + "_aac.mov")
+                                normalize_audio_to_aac(vc_initial, vc)
+                                vc_initial.unlink(missing_ok=True)
+                            else:
+                                vc = vc_initial
                         stage = "stamping ContentIdentifier"
                         pair.asset_id = make_live_photo(str(pc), str(vc))
                         stage = "importing to Photos"

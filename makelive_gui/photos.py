@@ -75,9 +75,23 @@ def import_live_photo(photo_path: pathlib.Path, video_path: pathlib.Path) -> Non
 
     def completion(success, error):
         if not success:
-            state["error"] = (
-                error.localizedDescription() if error else "unknown PhotoKit error"
-            )
+            if error is not None:
+                desc = error.localizedDescription()
+                code = error.code()
+                domain = str(error.domain())
+                # Failure reason often contains the actionable detail.
+                reason = None
+                try:
+                    reason = error.localizedFailureReason()
+                except Exception:
+                    reason = None
+                parts = [str(desc) if desc else "PhotoKit refused the import"]
+                if reason:
+                    parts.append(str(reason))
+                parts.append(f"(code {code}, {domain})")
+                state["error"] = " — ".join(parts)
+            else:
+                state["error"] = "unknown PhotoKit error"
         event.set()
 
     library.performChanges_completionHandler_(changes_block, completion)

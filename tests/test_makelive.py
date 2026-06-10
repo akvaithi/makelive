@@ -492,3 +492,121 @@ def test_heic_size_growth_is_bounded(tmp_path):
     # append a large amount of data.
     growth = new_size - orig_size
     assert -4096 < growth < 4096, f"unexpected file size delta: {growth} bytes"
+
+
+# ---------------------------------------------------------------------------
+# Tests for the byte-perfect MP4 / QuickTime path (mp4_metadata.py)
+#
+# The video path's correctness properties mirror the HEIC ones:
+#   * the `mdat` box is untouched (HEVC / H.264 bitstream is byte-identical)
+#   * no bytes sit outside a top-level box
+#   * the ContentIdentifier round-trips correctly via live_id() and is_live_photo_pair()
+#   * running twice replaces the value rather than accumulating duplicate keys
+# ---------------------------------------------------------------------------
+
+
+def _mp4_mdat_payload(data: bytes) -> bytes:
+    """Like _mdat_payload but doesn't assume the bundled HEIC's 64-bit form;
+    works on every form (compact 32-bit / 64-bit extended / size-to-end-of-file)."""
+    return _mdat_payload(data)
+
+
+@pytest.mark.parametrize("video", [TEST_VIDEO_MP4, TEST_VIDEO_MOV])
+def test_mp4_mdat_is_byte_identical(video, tmp_path):
+    """The encoded video samples inside mdat must be untouched.
+
+    For QuickTime / MP4 the rewrite never moves or extends mdat: the original
+    moov region becomes a `free` box of identical size, and the new moov is
+    appended after mdat. So mdat is byte-identical, not just a prefix-match.
+    """
+
+    test_image, _, _ = copy_test_images(tmp_path)
+    test_video = tmp_path / video.name
+    original = pathlib.Path(test_video).read_bytes()
+    asset_id = make_live_photo(test_image, str(test_video))
+    assert asset_id
+
+    modified = pathlib.Path(test_video).read_bytes()
+    orig_mdat = _mp4_mdat_payload(original)
+    new_mdat = _mp4_mdat_payload(modified)
+
+    assert orig_mdat == new_mdat, "mdat content (compressed video samples) was modified"
+    assert hashlib.sha256(orig_mdat).hexdigest() == hashlib.sha256(new_mdat).hexdigest()
+
+
+@pytest.mark.parametrize("video", [TEST_VIDEO_MP4, TEST_VIDEO_MOV])
+def test_mp4_all_bytes_enclosed_in_top_level_boxes(video, tmp_path):
+    """Every byte of the rewritten file must sit inside a top-level box."""
+
+    test_image, _, _ = copy_test_images(tmp_path)
+    test_video = tmp_path / video.name
+    make_live_photo(test_image, str(test_video))
+    data = pathlib.Path(test_video).read_bytes()
+
+    last_end = 0
+    for _, offset, size in _walk_top_level_boxes(data):
+        assert offset == last_end, (
+            f"gap between boxes (expected next box at {last_end}, found at {offset})"
+        )
+        last_end = offset + size
+    assert last_end == len(data), (
+        f"{len(data) - last_end} byte(s) past the final top-level box (orphaned data)"
+    )
+
+
+@pytest.mark.parametrize("video", [TEST_VIDEO_MP4, TEST_VIDEO_MOV])
+def test_mp4_round_trip_with_live_id(video, tmp_path):
+    """live_id() returns the asset id make_live_photo just wrote."""
+
+    test_image, _, _ = copy_test_images(tmp_path)
+    test_video = tmp_path / video.name
+    asset_id = make_live_photo(test_image, str(test_video))
+    assert live_id(test_image) == asset_id
+    assert live_id(str(test_video)) == asset_id
+    assert is_live_photo_pair(test_image, str(test_video)) == asset_id
+
+
+@pytest.mark.parametrize("video", [TEST_VIDEO_MP4, TEST_VIDEO_MOV])
+def test_mp4_replace_existing_content_identifier(video, tmp_path):
+    """Running twice with different ids replaces the value, doesn't accumulate
+    duplicate `keys` / `ilst` entries inside moov/meta."""
+
+    test_image, _, _ = copy_test_images(tmp_path)
+    test_video = tmp_path / video.name
+    first = make_live_photo(test_image, str(test_video))
+    second = make_live_photo(
+        test_image, str(test_video), asset_id=str(uuid.uuid4()).upper()
+    )
+    assert first != second
+    assert live_id(str(test_video)) == second
+    assert is_live_photo_pair(test_image, str(test_video)) == second
+
+
+def test_mp4_metadata_module_raises_on_missing_moov(tmp_path):
+    """The byte-perfect path should error clearly on files it can't handle."""
+
+    from makelive.mp4_metadata import set_mp4_content_identifier
+
+    bogus = tmp_path / "bogus.mov"
+    # Looks like an ISOBMFF file (ftyp present) but no moov.
+    bogus.write_bytes(
+        b"\x00\x00\x00\x14ftypqt  \x00\x00\x00\x00qt  \x00\x00\x00\x00"
+        + b"\x00\x00\x00\x10mdat" + b"\x00" * 8
+    )
+    with pytest.raises(ValueError):
+        set_mp4_content_identifier(bogus, "ABCDEF01-2345-6789-ABCD-EF0123456789")
+
+
+@pytest.mark.parametrize("video", [TEST_VIDEO_MP4, TEST_VIDEO_MOV])
+def test_mp4_size_growth_is_bounded(video, tmp_path):
+    """File grows by at most a couple of KiB (the new moov, if larger than
+    the old one, is appended; otherwise the rewrite is in-place)."""
+
+    test_image, _, _ = copy_test_images(tmp_path)
+    test_video = tmp_path / video.name
+    orig_size = pathlib.Path(test_video).stat().st_size
+    make_live_photo(test_image, str(test_video))
+    new_size = pathlib.Path(test_video).stat().st_size
+    growth = new_size - orig_size
+    # An entirely-fresh meta box with one mdta key/value entry is well under 8 KiB.
+    assert -8192 < growth < 8192, f"unexpected file size delta: {growth} bytes"

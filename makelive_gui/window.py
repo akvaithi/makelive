@@ -1410,7 +1410,26 @@ class MainWindowController(NSObject):
                         tmp = pathlib.Path(tmp)
                         stage = "exporting from Photos" if pair.is_library_backed else "copying files"
                         pc, vc_initial = pair.materialize(tmp)
-                        if reencode_enabled:
+                        transcode_video = reencode_enabled
+                        audio_issue = False
+                        if not reencode_enabled:
+                            # Pre-flight check the source video for known
+                            # Live-Photo incompatibilities. Both are *silently
+                            # fixed*: a non-AAC audio track is transcoded on
+                            # its own (video stream stays byte-perfect), and a
+                            # video codec Photos won't pair (e.g. ProRes from
+                            # an iMovie / Final Cut export) forces the HEVC
+                            # re-encode, since byte-perfect isn't an option
+                            # for a codec Photos rejects outright. Only a
+                            # missing video track is a hard error.
+                            stage = "checking video compatibility"
+                            issues = check_live_photo_video(vc_initial)
+                            hard = [i for i in issues if "no video track" in i]
+                            if hard:
+                                raise ValueError("; ".join(hard))
+                            transcode_video = any("video codec is" in i for i in issues)
+                            audio_issue = any("audio codec is" in i for i in issues)
+                        if transcode_video:
                             stage = "re-encoding video to HEVC"
                             vc = tmp / (pair.video.stem + ".mov")
                             if vc != vc_initial:
@@ -1421,30 +1440,13 @@ class MainWindowController(NSObject):
                                 reencode_to_hevc(vc_initial, tmp_out, bitrate=DEFAULT_HEVC_BITRATE)
                                 vc_initial.unlink(missing_ok=True)
                                 tmp_out.rename(vc)
+                        elif audio_issue:
+                            stage = "transcoding audio to AAC"
+                            vc = tmp / (pair.video.stem + "_aac.mov")
+                            normalize_audio_to_aac(vc_initial, vc)
+                            vc_initial.unlink(missing_ok=True)
                         else:
-                            # Pre-flight check the source video for known
-                            # Live-Photo incompatibilities. Audio-codec issues
-                            # are *silently fixed* by transcoding only the
-                            # audio track to AAC (video stream stays
-                            # byte-perfect — no re-encode of pixels). Other
-                            # blockers (exotic video codec, no video track)
-                            # are surfaced as actionable errors.
-                            stage = "checking video compatibility"
-                            issues = check_live_photo_video(vc_initial)
-                            audio_issue = any("audio codec is" in i for i in issues)
-                            hard = [
-                                i for i in issues
-                                if "video codec is" in i or "no video track" in i
-                            ]
-                            if hard:
-                                raise ValueError("; ".join(hard))
-                            if audio_issue:
-                                stage = "transcoding audio to AAC"
-                                vc = tmp / (pair.video.stem + "_aac.mov")
-                                normalize_audio_to_aac(vc_initial, vc)
-                                vc_initial.unlink(missing_ok=True)
-                            else:
-                                vc = vc_initial
+                            vc = vc_initial
                         stage = "stamping ContentIdentifier"
                         pair.asset_id = make_live_photo(str(pc), str(vc))
                         stage = "importing to Photos"

@@ -455,8 +455,7 @@ def check_live_photo_video(video_path: str | os.PathLike) -> list[str]:
                 fourcc = _fourcc_to_str(subtype)
                 if fourcc not in _LIVE_PHOTO_VIDEO_CODECS:
                     issues.append(
-                        f"video codec is '{fourcc}' — Live Photos need H.264 or HEVC. "
-                        f"Enable 'Compress video to HEVC' to auto-fix."
+                        f"video codec is '{fourcc}' — Live Photos need H.264 or HEVC"
                     )
 
         # Audio codec (if any).
@@ -465,8 +464,7 @@ def check_live_photo_video(video_path: str | os.PathLike) -> list[str]:
             subtype = _audio_subtype(audio_tracks[0])
             fourcc = _fourcc_to_str(subtype) if subtype else "?"
             issues.append(
-                f"audio codec is '{fourcc}' — Live Photos need AAC. "
-                f"Enable 'Compress video to HEVC' to auto-fix."
+                f"audio codec is '{fourcc}' — Live Photos need AAC"
             )
 
     return issues

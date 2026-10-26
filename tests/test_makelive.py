@@ -323,3 +323,35 @@ def test_cli_check(tmp_path):
     assert results.exit_code == 0
     results = runner.invoke(main, ["--check", str(test_image), str(test_video)])
     assert "are Live Photos" in results.output
+
+
+@pytest.mark.skipif(not shutil.which("avconvert"), reason="avconvert not available")
+def test_prores_video_converts_to_live_photo_compatible(tmp_path):
+    """An iMovie-style ProRes + LPCM export is flagged, and the HEVC re-encode fixes it"""
+    from makelive.video_reencode import check_live_photo_video, reencode_to_hevc
+
+    prores = tmp_path / "prores.mov"
+    subprocess.run(
+        [
+            "avconvert",
+            "--preset",
+            "PresetAppleProRes422LPCM",
+            "--source",
+            str(TEST_VIDEO_HEIC),
+            "--output",
+            str(prores),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    issues = check_live_photo_video(prores)
+    assert any("video codec is" in i for i in issues)
+
+    hevc = tmp_path / "hevc.mov"
+    reencode_to_hevc(prores, hevc)
+    assert check_live_photo_video(hevc) == []
+
+    test_image = tmp_path / TEST_IMAGE_HEIC.name
+    shutil.copy(TEST_IMAGE_HEIC, test_image)
+    asset_id = make_live_photo(test_image, hevc)
+    assert is_live_photo_pair(test_image, hevc) == asset_id
